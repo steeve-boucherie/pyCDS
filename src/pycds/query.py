@@ -7,10 +7,13 @@ from time import time
 from functools import cached_property
 from typing import Any, Literal
 
-# import cdsapi
 from ecmwf.datastores import Client
 
 from xarray import Dataset
+
+
+# PACKAGE IMPORTS
+from pycds.config import PyCDSConfig, get_settings
 
 
 # LOGGER
@@ -85,55 +88,49 @@ class CDSQueryHandler():
 
     Attributes
     ----------
-    variables: str | list[str]
-        A string or list of strings listing the variable(s) to pull \
-        as default when executing a query. This can be override in \
-        the call of the `download` method.
-    t_start: str
-        A string defining the start date of the query, in YYYY-mm-dd format. \
-        This can be override in the call of the `download` method.
-    t_end: str
-        A string defining the end date of the query, in YYYY-mm-dd format. \
-        This can be override in the call of the `download` method.
+    default_query_vars: list[str]
+        Variable to query by default.
+    default_output_format: 'netcdf' | 'csv'
+        Default output format of the query.
+    default_query_start: str | None
+        (Optional) Default start date of the queries in "yyyy-mm-dd" format. \
+        Set to None to query data from the earliest available date.
+    default_query_end: str | None
+        (Optional) Default end date of the queries in "yyyy-mm-dd" format. \
+        Set to None to query data from the latest available date.
+
+    Parameters
+    ----------
+    cfg: PyCDSConfig | None
+        (Optional) Instance of pyCDS config for user-defined default.
     """
+
+    # Class Constant
+    # NOTE: These are fixed and thus should not be accessible for the user
+    # to be modified.
     DATASET: str = 'reanalysis-era5-single-levels-timeseries'
-    VARIABLES: list[str] = [
-        '2m_dewpoint_temperature',
-        'surface_pressure',
-        '2m_temperature',
-        '100m_u_component_of_wind',
-        '100m_v_component_of_wind'
-    ]
     PREC: int = .25
-    FRMT: Literal['netcdf', 'csv'] = 'netcdf'
 
-    def __init__(
-        self,
-        variables: str | list[str] | None = None,
-        t_start: str | None = None,
-        t_end: str | None = None,
-    ):
+    # Init
+    def __init__(self, cfg: PyCDSConfig | None = None) -> None:
         """Instantiate class object."""
-        self._variables = variables or self.VARIABLES
-        self._t_start = t_start or self.begin_datetime
-        self._t_end = t_end or self.end_datetime
+        cfg = cfg or get_settings()
+        self.default_query_vars = cfg.default_query_vars
+        self.default_output_format = cfg.default_output_format
+        self.default_query_start = cfg.default_query_start
+        self.default_query_end = cfg.default_query_end
 
-    # Propery
-    @property
-    def variables(self) -> str | list[str]:
-        """Return the selected list of variables."""
-        return self._variables
-
+    # Properties
     @cached_property
-    def begin_datetime(self) -> str:
-        """return the begin datetime of the selected collection \
+    def dataset_start(self) -> str:
+        """return the begin date of the selected collection \
             dataset in yyyy-mm-dd format."""
         dttm = Client().get_collection(self.DATASET).begin_datetime
         return dttm.strftime(r'%Y-%m-%d')
 
     @cached_property
-    def end_datetime(self) -> str:
-        """return the end datetime of the selected collection \
+    def dataset_end(self) -> str:
+        """return the end date of the selected collection \
             dataset in yyyy-mm-dd format."""
         # NOTE: Currently the end datetime is wrong in the metadata.
         # It returns at Dec 31st, 2024.
@@ -145,16 +142,6 @@ class CDSQueryHandler():
         # dttm = Client.get_collection(self.dataset).end_datetime
         return dttm.strftime(r'%Y-%m-%d')
 
-    @property
-    def t_start(self) -> str:
-        """Return the selected start date of the query."""
-        return self._t_start
-
-    @property
-    def t_end(self) -> str:
-        """Return the selected start date of the query."""
-        return self._t_end
-
     # Method
     def download(
         self,
@@ -164,6 +151,7 @@ class CDSQueryHandler():
         variables: str | list[str] | None = None,
         t_start: str | None = None,
         t_end: str | None = None,
+        output_format: Literal['netcdf', 'csv'] | None = None,
     ) -> Dataset:
         """
         Given the (lat, lon) coordinates, the list of select variables and \
@@ -178,24 +166,35 @@ class CDSQueryHandler():
             Latitude coordinate of the selected location.
         lon: float
             Longitude coordinate of the selected location.
-        variables: str | list[str]
-            A string or list of strings listing the variable(s) to pull. \
-            Use the class default if None is passed.
-        t_start: str | None
-            A string defining the start date of the query, in YYYY-mm-dd format. \
-            Use the class default if None is passed.
-        t_end: str | None
-            A string defining the end date of the query, in YYYY-mm-dd format. \
-            Use the class default if None is passed.
+        variables: str | list[str] | None = None
+            Dataset variable(s) to be queried. Use the library default if \
+            None ise passed.
+        t_start: 'netcdf' | 'csv'
+            Query start date in 'yyyy-mm-dd' format. Use the class default if \
+            None ise passed.
+        t_end: 'netcdf' | 'csv'
+            Query end date in 'yyyy-mm-dd' format. Use the class default if \
+            None ise passed.
+        output_format: Literal['netcdf', 'csv'] | None
+            Desired output format. Use the class default if None is passed.
 
         Returns
         -------
             Dataset
         """
         # Assign default
-        variables = variables or self.variables
-        t_start = t_start or self.t_start
-        t_end = t_end or self.t_end
+        variables = variables or self.default_query_vars
+        t_start = t_start or self.default_query_start or self.dataset_start
+        t_end = t_end or self.default_query_end or self.dataset_end
+        output_format = output_format or self.default_output_format
+
+        # Validate
+        allowed = ['netcdf', 'csv']
+        if output_format not in allowed:
+            msg = f'Invalid output format: {output_format}. Allowed values are: ' \
+                  f'{allowed}. Please check your inputs.'
+            logger.error(msg)
+            raise ValueError(msg)
 
         # Build the request
         request = {
@@ -205,7 +204,7 @@ class CDSQueryHandler():
                 'longitude': round(lon / self.PREC) / self.PREC,
             },
             'date': [f'{t_start}/{t_end}'],
-            'data_format': self.FRMT,
+            'data_format': output_format,
         }
         _display_request(request)
 
@@ -215,7 +214,7 @@ class CDSQueryHandler():
         logger.info('Starting query.')
         t0 = time()
         client.retrieve(
-            self.dataset,
+            self.DATASET,
             request,
             target=path
         )
