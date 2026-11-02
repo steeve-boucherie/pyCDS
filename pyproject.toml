@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyCDS"
+version = "0.1.0"
+description = "Command-line utility to download ERA5 time series for a single location from the Copernicus Climate Data Store (CDS)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Clément Jacquet", email = "do.not@email.me" }]
+keywords = ["ERA5", "CDS", "climate", "reanalysis", "copernicus"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
+
+# TODO: add any other runtime dependencies of your script (e.g. numpy, pandas, xarray)
+dependencies = [
+    # Data science
+    "numpy==2.3.5",
+    "scipy>=1.11",
+    "pandas>=2.0",
+    "xarray>=2023.1",
+    # NetCDF
+    "h5py>=3.9",
+    "netcdf4>=1.6",
+    # Pythonic way of life
+    "pydantic>=2.0",
+    # Package management
+    "python-dotenv>=1.0",
+    # CDS
+    "ecmwf-datastores-client>=0.5.1",
+]
+
+[project.optional-dependencies]
+jupyter = [
+    # Moved out of core deps — these are dev/interactive tools, not runtime deps
+    "ipykernel>=6.29",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
+    "nbsphinx>=0.9",
+]
+
+[project.scripts]
+# Installs a `pycds` command that calls main() in src/pycds/cli.py
+pycds = "pycds.cli:main"
+
+[project.urls]
+Homepage = "https://https://github.com/steeve-boucherie/pyCDS"
+Issues = "https://github.com/steeve-boucherie/pyCDS/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pycds"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
