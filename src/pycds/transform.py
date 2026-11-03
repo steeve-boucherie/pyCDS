@@ -203,7 +203,8 @@ class DataTransformerInterface(abc.ABC):
             DataTransformerInterface
         """
         # Check input and initialze internal variable
-        self.validate_inputs(ds).raw_ds = ds
+        self.validate_inputs(ds)
+        self._ds = ds
 
         return self
 
@@ -291,12 +292,12 @@ class Era5AirDensityCalculator(DataTransformerInterface):
     @property
     def required_dims(self) -> list[str]:
         """List all dimensions that must be present in the dataset."""
-        raise [self.mapper.t_dim]
+        return [self.mapper.t_dim]
 
     @property
     def required_coords(self) -> list[str]:
         """List all coordinates that must be present in the dataset."""
-        raise []
+        return []
 
     @property
     def required_keys(self) -> list[str]:
@@ -364,12 +365,12 @@ class WSCalculator(DataTransformerInterface):
     @property
     def required_dims(self) -> list[str]:
         """List all dimensions that must be present in the dataset."""
-        raise []
+        return []
 
     @property
     def required_coords(self) -> list[str]:
         """List all coordinates that must be present in the dataset."""
-        raise []
+        return []
 
     @property
     def required_keys(self) -> list[str]:
@@ -458,12 +459,12 @@ class WSDensityCorrector(DataTransformerInterface):
     @property
     def required_dims(self) -> list[str]:
         """List all dimensions that must be present in the dataset."""
-        raise [self.mapper.t_dim]
+        return [self.mapper.t_dim]
 
     @property
     def required_coords(self) -> list[str]:
         """List all coordinates that must be present in the dataset."""
-        raise []
+        return []
 
     @property
     def required_keys(self) -> list[str]:
@@ -554,12 +555,12 @@ class WDirCalculator(DataTransformerInterface):
     @property
     def required_dims(self) -> list[str]:
         """List all dimensions that must be present in the dataset."""
-        raise [self.mapper.t_dim]
+        return [self.mapper.t_dim]
 
     @property
     def required_coords(self) -> list[str]:
         """List all coordinates that must be present in the dataset."""
-        raise []
+        return []
 
     @property
     def required_keys(self) -> list[str]:
