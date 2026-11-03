@@ -13,7 +13,7 @@ from xarray import Dataset
 
 
 # PACKAGE IMPORTS
-from pycds.config import PyCDSConfig, get_settings
+from pycds.config import PyCDSSettings, get_settings
 
 
 # LOGGER
@@ -112,7 +112,7 @@ class CDSQueryHandler():
     PREC: int = .25
 
     # Init
-    def __init__(self, cfg: PyCDSConfig | None = None) -> None:
+    def __init__(self, cfg: PyCDSSettings | None = None) -> None:
         """Instantiate class object."""
         cfg = cfg or get_settings()
         self.default_query_vars = cfg.default_query_vars
