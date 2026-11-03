@@ -12,6 +12,7 @@ import xarray as xr
 
 # PACKAGE IMPORT
 from pycds.config import KeyMapper, get_mapper
+from pycds.utils import check_required
 
 
 # LOGGER
@@ -48,67 +49,6 @@ class AtmosphericConstant():
 
 
 # UTILS
-def check_required(
-    ds: xr.Dataset,
-    req_elems: str | list[str],
-    elem_type: Literal['key', 'dim', 'coord', 'all', 'attr'] = 'key'
-) -> None:
-    """
-    Verify that the required elements are present within the input dataset,
-        raise KeyError, otherwise.
-
-    Parameters
-    ----------
-    ds: xr.Dataset
-        Input dataset to be tested.
-    req_keys: str | list[str]
-        Mandatory key(s)
-    elem_type: 'key' | 'dim' | 'coord' | 'all'
-        Element type to be tested.
-        Default is 'key'
-
-    Returns
-    -------
-        None
-
-    Raises
-    ------
-    - KeyError:
-        - if any of req_elems is missing from the input dataset.
-    - ValueError:
-        - if elem_type is not one of 'key' | 'dim' | 'coord' | 'all'
-    """
-    # Check input
-    allowed_type = ['key', 'dim', 'coord', 'all', 'attr']
-    if elem_type not in allowed_type:
-        msg = 'Invalid value for parameter "elem" type. ' \
-              f'Expected one of "{allowed_type}", but received "{elem_type}". ' \
-              'Please check your inputs.'
-        logger.error(msg)
-        raise ValueError(msg)
-
-    # Force input type
-    req_elems = [[req_elems], req_elems][isinstance(req_elems, list)]
-    ds = [ds, xr.merge([ds])][isinstance(ds, xr.DataArray)]
-
-    all_elems = {
-        'key': ds.keys(),
-        'dim': ds.dims,
-        'coord': ds.coords,
-        'all': ds.variables,
-        'attr': ds.attrs.keys()
-    }[elem_type]
-    all_elems = set(all_elems)
-
-    req_elems = set(req_elems)
-    if not req_elems.issubset(all_elems):
-        diff = list(req_elems - all_elems)
-        msg = f'The following mandatory {elem_type}(s) are absent from input ' \
-              f'dataset: "{diff}".\nPlease check your inputs.'
-        logger.error(msg)
-        raise KeyError(msg)
-
-
 # ABSTRACT
 class DataTransformerInterface(abc.ABC):
     """
@@ -134,7 +74,7 @@ class DataTransformerInterface(abc.ABC):
     """
 
     # Init
-    def __init__(self, mapper: KeyMapper | None = None):
+    def __init__(self, mapper: KeyMapper | None = None) -> None:
         """Create class instance."""
         self.mapper = mapper if mapper is not None else get_mapper()
         # Internal
@@ -283,7 +223,7 @@ class Era5AirDensityCalculator(DataTransformerInterface):
         self,
         cst: AtmosphericConstant | None = None,
         mapper:  KeyMapper | None = None,
-    ):
+    ) -> None:
         """Create class instance."""
         super().__init__(mapper)
         self.cst = cst if cst is not None else AtmosphericConstant()
@@ -447,7 +387,7 @@ class WSDensityCorrector(DataTransformerInterface):
         self,
         rho_ref: float | None = None,
         mapper:  KeyMapper | None = None,
-    ):
+    ) -> None:
         """Create class instance."""
         super().__init__(mapper)
         self.rho_ref = (
@@ -540,7 +480,7 @@ class WDirCalculator(DataTransformerInterface):
         self,
         unit: Literal['deg', 'rad'] = 'deg',
         mapper:  KeyMapper | None = None,
-    ):
+    ) -> None:
         """Create class instance."""
         super().__init__(mapper)
         allowed = ['deg', 'rad']
