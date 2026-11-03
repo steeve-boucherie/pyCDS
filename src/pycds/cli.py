@@ -1,24 +1,33 @@
-"""Script for ERA5 data download."""
+"""Command line script for downloading ERA5 timeseries."""
 import argparse
 import logging
-import os
 import shutil
-import zipfile
 from functools import cached_property
 from pathlib import Path
-from typing import Any
-
-import pandas as pd
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
-import xarray as xr
-
 
 # PACKAGE IMPORTS
-from pycds.config import get_settings
+from pycds.config import KeyMapper, PyCDSSettings, get_mapper, get_settings
 from pycds.path import DOWNLOAD_FOLDER, TMP_FOLDER
 from pycds.query import CDSQueryHandler
+from pycds.transform import (
+    DataTransformerInterface,
+    Era5AirDensityCalculator,
+    WDirCalculator,
+    WSCalculator,
+    WSDensityCorrector,
+)
+from pycds.utils import (
+    add_dttm,
+    load_archive,
+    save_ds,
+    save_groups,
+    to_list,
+)
+from pycds.variable_registry import VariableRegistry
 
 
 # LOGGER
@@ -30,7 +39,8 @@ NAME: str = 'ERA5Downloader'
 
 # SETTINGS
 # List of allowed additionnal variables
-# ALLOWED_VARS = Literal['ws', 'wd', 'rho']
+ALLOWED_VARS = Literal['ws', 'wd', 'rho', 'ws_corr']
+ALLOWED_DTTM = Literal['month', 'year']
 
 
 # ============================================================================
@@ -42,53 +52,65 @@ class ERA5DownloadConfig(BaseModel):
 
     Attributes
     ----------
-    input_root: Path
-        The root folder to scan for finding wind farm folders (see farms below).
-    farms: Dict[str, str | List[str] | None] | None
-        The farms for which ERA5 data will be downloaded. The attribute must be \
-        a dictionnary of the form form owner_name -> selected_farms listing \
-        the selected farm for each owner. All farms and owner will be return \
-        if None is passed. Returns all farm associated to on owner if \
-        farm_dict[owner] is None.
-    site_info_file: str
-        The name of the site info file as it should appear in the wind \
-        farm subolders.
-    lat_col: str
-        The name of the column containing the latitude coordinates of the turbines \
-        as it should appear in the site info data frame.
-    lon_col: str
-        The name of the column containing the longitude coordinates of the turbines \
-        as it should appear in the site info data frame.
     tmp_folder: Path
-        The temporary folder where the downloaded files from ECMWF are saved \
-        before being processed and split in monthly chunks.
+        The path to the temporary folder where the downloaded archive \
+        will be saved before extraction.
     output_root: Path
-        The root folder where the monthly ERA5 datasets will be saved. The resulting \
-        folder tree will follow the same <OWNER>/<FARM> architecture as the input \
-        folder tree.
-    output_sub_dir: str
-        The name of the folder containing the ERA5 data that will be created in \
-        each <OWNER>/<FARM> subfolder.
+        The path to the folder where the consolidated dataset will be saved.
+    output_subdir: str
+        The subfolder that will be created in output_root and where the data \
+        will be saved. Default is "era5".
     output_fname: str
-        The file name for the ERA5 dataset.
-    extra_query_vars: str | List[str]
-        Extra variable(s) that should be queried in addition to the mandatory \
-        channel. Refer to the ECMWF portal for a complete list of available \
-        variables.
-    query_start_date: str | None
-        The start date of the query. Download from the first available date \
+        The name of the file containing the downloaded data as it will be saved.
+    split_frequency: 'monthly' | 'yearly' | None
+        (Optional) The frequency for splitting the downloaded data into smaller \
+        time chunks for saving. If "yearly", save the each yearly chunk in a \
+        subfolder, "YYYY", whose name is the corresponding year. If "month", \
+        save each monthly chunk in a subfolder tree, "YYYY/mm", with name defined \
+        by the corresponding year and month.
+    lat: float
+        The latitude coordinate of the query in degress. This must be \
+        in [-90°, 90°] interval.
+    lon: float
+        The longitude coordinate of the query in degress. This must be \
+        in [-180°, 180°] interval.
+    start: str | None
+        (Optional) The query start date in yyyy-mm-dd format. \
+        Use the library default if None is passed.
+    end: str | None
+        (Optional) The query end date in yyyy-mm-dd format. \
+        Use the library default if None is passed.
+    variable: list[str] | None
+        (Optional) The variable(s) to be queried . \
+        Use the library default if None is passed.
+    eng_vars: str | list[str] | None
+        (Optional) The additional variables that must be appended to the \
+        downloaded as a post-processing step. These must be valid variables \
+        with a builder associated to it.
+    wd_unit: 'deg' | 'rad'
+        The unit in which the wind direction should be calculated. This is \
+        used only if "wd" is passed in "eng_vars".
+    rho_ref: float | None
+        The reference air density for wind speed correction. This is used \
+        only if "ws_corr" is passed in "eng_vars". Use the library default \
         if None is passed.
-    query_end_date: str | None
-        (Optional) The end date of the query. Download until the latest \
-        available date if None is passed.
-    extra_eng_vars: str | List[str]
-        Engineered variable that should be added to the ERA5 data during the \
-        processing of the raw dataset. These must be defined function of the \
-        existing dataset variables.
     """
 
     # Config
     model_config = ConfigDict(frozen=True, extra='forbid')
+
+    # ------------------------------------------------------------------------
+    # I/O settings
+    # ------------------------------------------------------------------------
+    # Split results
+    split_frequency: Literal['monthly', 'yearly'] | None = None
+
+    # Output settings
+    tmp_folder: Path = TMP_FOLDER
+    output_root: Path = DOWNLOAD_FOLDER
+    output_subdir: str = 'era5'
+    output_fname: str = 'era5.nc'
+    # ------------------------------------------------------------------------
 
     # ------------------------------------------------------------------------
     # Query settings
@@ -103,19 +125,20 @@ class ERA5DownloadConfig(BaseModel):
 
     # Queried variables
     variables: str | list[str] | None = None
-
-    # Output settings
-    # output_format: Literal['netcdf', 'csv'] | None = None
-    tmp_folder: Path = TMP_FOLDER
-    output_root: Path = DOWNLOAD_FOLDER
-    output_subdir: str = 'era5'
-    output_fname: str = 'era5.nc'
     # ------------------------------------------------------------------------
 
     # ------------------------------------------------------------------------
     # Data enrichment
     # ------------------------------------------------------------------------
-    # extra_eng_vars: ALLOWED_VARS | list[ALLOWED_VARS] = list(get_args(ALLOWED_VARS))
+    # Engineered variables
+    # TODO: Add validator
+    eng_vars: ALLOWED_VARS | list[ALLOWED_VARS] | None = list(get_args(ALLOWED_VARS))
+
+    # Wind direction unit
+    wd_unit: Literal['deg', 'rad'] = 'deg'
+
+    # Reference air density (leave None to use default)
+    rho_ref: float | None = None
     # ------------------------------------------------------------------------
 # ============================================================================
 
@@ -132,17 +155,32 @@ class ModelFactory():
     cfg: ERA5DownloadConfig
         Instance of configuration handler, containing \
         analysis specific settings.
+    settings: KeyMapper | None
+        (Optional) Custom library settings. Use the \
+        package default if None is passed.
+    mapper: KeyMapper | None
+        (Optional) Custom mapper from aliases to dataset keys. Use the \
+        package default if None is passed.
     """
 
     # Class defaults
     CFG_CLS = ERA5DownloadConfig
 
     # Init
-    def __init__(self, cfg: ERA5DownloadConfig):
+    def __init__(
+        self,
+        cfg: ERA5DownloadConfig,
+        settings: PyCDSSettings | None = None,
+        mapper: KeyMapper | None = None,
+    ) -> None:
         """Create class instance."""
         # Validate inputs
         self.validate_inputs(cfg)
         self._cfg = cfg
+
+        # System
+        self.settings = settings if settings is not None else get_settings()
+        self.mapper = mapper if mapper is not None else get_mapper()
 
     # Properties
     @property
@@ -164,14 +202,37 @@ class ModelFactory():
     def query_params(self) -> dict[str, Any]:
         """Return the query parameters."""
         out = dict(
-            # path=self.cfg.tmp_folder,
             lat=self.cfg.lat,
             lon=self.cfg.lon,
             variables=self.cfg.variables,
             t_start=self.cfg.start,
             t_end=self.cfg.end,
-            output_format='netcdf'  # NOTE: We need it to be a CSV
+            output_format='netcdf'  # NOTE: We need it to be a NetCDF
         )
+        return out
+
+    @property
+    def eng_vars(self) -> list[str]:
+        """Return the list of engineered variables to append to the dataset."""
+        out = [
+            self.mapper.__getattribute__(f'{alias}_key')
+            for alias in to_list(self.cfg.eng_vars)
+        ]
+        return out
+
+    @property
+    def output_path(self) -> Path:
+        """Return the path to the folder where the data will be saved."""
+        return self.cfg.output_root / self.cfg.output_subdir
+
+    @property
+    def group_coords(self) -> ALLOWED_DTTM | list[ALLOWED_DTTM]:
+        """Return the grouping coordinate(s) for splitting the dataset \
+            in time chunk."""
+        out = {
+            'yearly': 'year',
+            'monthly': ['year', 'month']
+        }[self.cfg.split_frequency]
         return out
 
     # Utils
@@ -197,174 +258,71 @@ class ModelFactory():
             raise ValueError(msg)
 
     # Model
-    # @cached_property
-    # def default_builders(self) -> Mapping[str, transformer_like]:
-        # """
-        # Assemble the default builders from the configuration.
+    @cached_property
+    def default_builders(self) -> dict[str, DataTransformerInterface]:
+        """
+        Assemble the default builders from the configuration.
 
-        # Returns
-        # -------
-        #     Mapping[str, transformer_like]
-        # """
-        # # Build
-        # builders: Mapping[str, transformer_like] = {
-        #     # Extra variables
-        #     # Air density
-        #     'rho': Era5AirDensityCalculator(
-        #         var_name='rho',
-        #         p_key='sp',
-        #         t_key='t2m',
-        #         dew_key='d2m',
-        #     ),
-        #     # Wind direction
-        #     'wd': WDirCalculator(
-        #         wd_key='wd',
-        #         u_key='u100',
-        #         v_key='v100',
-        #         unit='deg',
-        #     ),
-        #     # Wind speed
-        #     'ws': WSCalculator(
-        #         ws_key='ws',
-        #         u_key='u100',
-        #         v_key='v100',
-        #     ),
-        #     # DTTM Elem (for saving)
-        #     # Year
-        #     'year': DttmElemAdder(
-        #         t_dim='valid_time',
-        #         elements=['year'],
-        #     ),
-        #     'month': DttmElemAdder(
-        #         t_dim='valid_time',
-        #         elements=['month'],
-        #     ),
-        # }
-
-        # return builders
+        Returns
+        -------
+            dict[str, transformer_like]
+        """
+        # Build
+        builders: dict[str, DataTransformerInterface] = {
+            # Extra variables
+            # Air density
+            self.mapper.rho_key: Era5AirDensityCalculator(
+                mapper=self.mapper
+            ),
+            # Wind direction
+            self.mapper.wd_key: WDirCalculator(
+                unit=self.cfg.wd_unit,
+                mapper=self.mapper,
+            ),
+            # Wind speed
+            self.mapper.ws_key: WSCalculator(
+                mapper=self.mapper
+            ),
+            # Density-correct wind speed
+            self.mapper.ws_corr_key: WSDensityCorrector(
+                rho_ref=self.cfg.rho_ref,
+                mapper=self.mapper
+            )
+        }
+        return builders
 
     @cached_property
     def query_handler(self) -> CDSQueryHandler:
         """Build the query handler object."""
-        return CDSQueryHandler(get_settings())
+        return CDSQueryHandler(self.settings)
 
     # Builders
-    # def build_var_registry(self) -> VariableRegistry:
-    #     """
-    #     Build the VariableRegistry object.
+    def build_var_registry(self) -> VariableRegistry:
+        """
+        Build the VariableRegistry object.
 
-    #     Returns
-    #     -------
-    #         Mapping[str, transformer_like]
-    #     """
-    #     return VariableRegistry(self.default_builders)
+        Returns
+        -------
+            VariableRegistry
+        """
+        return VariableRegistry(self.default_builders)
 # ============================================================================
 
 
 # ============================================================================
 # UTILS
 # ============================================================================
-def load_archive(path: Path) -> xr.Dataset:
-    """
-    Exract data from the zip file downloaded from ECMWF and load into a dataset.
-
-    Parameters
-    ----------
-    path: Path
-        The name of the archive downloaded from the ECMWF.
-
-    Returns
-    -------
-        Dataset
-    """
-    if not path.is_file():
-        msg = f'Input path ({str(path)})is not a valid file. Please check your inputs.'
-        logger.error(msg)
-        raise ValueError(msg)
-
-    with zipfile.ZipFile(path) as zip_ref:
-        all_files = zip_ref.namelist()
-        zip_ref.extractall(path.parent)
-
-    nc_files = [f for f in all_files if f.endswith('.nc')]
-    if nc_files == []:
-        msg = 'No netCDF file (with ".nc" extension) found in the archive. ' \
-              'Check the query output on the ECMWF portal.'
-        logger.error(msg)
-        raise ValueError(msg)
-
-    if len(nc_files) != 1:
-        logger.warning(
-            'Multiple netCDF file (with ".nc" extension) were found in the '
-            'archive.\nOnly the first file from the list will be loaded.\n'
-            f'Please check this is the expected behavior.\nList of files: {nc_files}.'
-        )
-
-    with xr.open_dataset(path.parent / nc_files[0]) as ds:
-        ds.load()
-
-    return ds
-
-
-# TODO: Move to a proper I/O submodule
-def save_monthly_ds(
-    ds: xr.Dataset,
-    output_root: str | Path,
-    out_fname: str
-) -> None:
-    """
-    Given the dataset of ERA5 data, save the monthly chunk following the \
-    <YEAR> / <MONTH> folder tree convention.
-
-    Parameters
-    ----------
-    ds: xr.Dataset
-        Input dataset
-    output_root: str | Path
-        Folder where to save the data.
-    out_fname: str
-        The name of the file.
-    """
-    def _drop_non_dims_coords(ds: xr.Dataset):
-        """Drop the non-dimencoordinate before saving."""
-        ds = ds.drop_vars([
-            c for c in ds.coords
-            if c not in ds.dims
-        ])
-        return ds
-
-    # Add the year/month
-    all_dims = list(ds.dims)
-    if 'valid_time' not in all_dims:
-        msg = 'Input dataset misses the time dimension (name= "valid_time").' \
-              f'Dataset dimensions ares: {all_dims}. Please check your inputs.'
-        logger.error(msg)
-        raise ValueError(msg)
-
-    times = pd.to_datetime(ds['valid_time'].data)
-    ds = ds.assign_coords({
-        'month': ('valid_time', times.month),
-        'year': ('valid_time', times.year),
-    })
-
-    # Group and save
-    groups = ds.groupby(['year', 'month'])
-    for n, ((year, month), sub) in enumerate(groups):
-        logger.info(
-            f'{NAME}: Save data for year: {year}, month: {month} '
-            f'({n + 1:3d} of {len(groups.groups.keys())})'
-        )
-        out_path = output_root / f'{year:4d}' / f'{month:02d}'
-        if not out_path.exists():
-            os.makedirs(out_path)
-        _drop_non_dims_coords(sub).to_netcdf(out_path / out_fname)
 # ============================================================================
 
 
 # ============================================================================
 # MAIN
 # ============================================================================
-def download_era5(cfg: ERA5DownloadConfig) -> None:
+def download_era5(
+    cfg: ERA5DownloadConfig,
+    settings: PyCDSSettings | None = None,
+    mapper: KeyMapper | None = None,
+) -> None:
     """
     Download the ERA5 data and save the resulting datasets using the \
     year/month folder tree.
@@ -374,9 +332,16 @@ def download_era5(cfg: ERA5DownloadConfig) -> None:
     cfg: ERA5DownloadConfig
         Instance of configuration handler, containing \
         analysis specific settings.
+    settings: KeyMapper | None
+        (Optional) Custom library settings. Use the \
+        package default if None is passed.
+    mapper: KeyMapper | None
+        (Optional) Custom mapper from aliases to dataset keys. Use the \
+        package default if None is passed.
     """
     # Model factory
-    mf = ModelFactory(cfg)
+    mf = ModelFactory(cfg, settings, mapper)
+    var_reg = mf.build_var_registry()
 
     # Run query
     logger.info(f'{NAME}: Run query.')
@@ -385,17 +350,25 @@ def download_era5(cfg: ERA5DownloadConfig) -> None:
         tmp_path = cfg.tmp_folder / 'ecmwf_query.zip'
         mf.query_handler.download(tmp_path, **mf.query_params)
 
-        # Enrich data
+        # Extract data from archive data
         logger.info(f'{NAME}: Extract from archive data.')
         ds = load_archive(tmp_path)
 
+        # Entich dataset
+        logger.info(f'{NAME}: Enrich dataset')
+        ds = var_reg.ensure_flags(ds, mf.eng_vars)
+
         # Save to year/month
-        logger.info(f'{NAME}: Save to year month format.')
-        save_monthly_ds(
-            ds,
-            cfg.output_root / cfg.output_subdir,
-            cfg.output_fname
-        )
+        logger.info(f'{NAME}: Save data.')
+        if mf.cfg.split_frequency is not None:
+            ds = add_dttm(ds, mf.mapper.t_dim, mf.group_coords)
+            save_groups(
+                ds.groupby(mf.group_coords),
+                mf.output_path,
+                mf.cfg.output_fname
+            )
+        else:
+            save_ds(ds, mf.output_path, mf.cfg.output_fname)
 
     except Exception:
         logger.exception(f'{NAME}: Failed to download data. Check terminal for more details')
@@ -416,7 +389,7 @@ def _parse_arguments() -> argparse.Namespace:
     """Parse user inputs."""
     parser = argparse.ArgumentParser(
         prog=NAME,
-        description=__file__.__doc__,
+        description=__doc__,
         epilog='Run with code using uv run <path_to_file> --[OPTION] [VALUE]',
     )
 
@@ -472,6 +445,18 @@ def _parse_arguments() -> argparse.Namespace:
         dest=field,
         type=str,
         help='Sub-folder where to save the data in the output root.'
+    )
+
+    # Split results
+    field = 'split_frequency'
+    parser.add_argument(
+        f'--{field}'.replace('_', '-'),
+        required=fields[field].is_required(),
+        default=fields[field].default,
+        dest=field,
+        choices=get_args(fields[field].annotation),
+        type=str,
+        help='The frequency at which the result should be split (yearly or monthly).'
     )
 
     return parser.parse_args()
