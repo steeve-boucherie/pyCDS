@@ -185,7 +185,7 @@ class VariableRegistry():
         # Generate keys
         order, _ = self.topological_order(missing, existing)
         for key in order:
-            logger.info(f'{self.name}: Generate missing key: "{key}"')
+            logger.info(f'{self.name}: Generating additional key: "{key}"')
             transformer = self._builders[key]
             ds = transformer.fit_transform(ds)
             ds[key].attrs['flag_source'] = (
