@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 class KeyMapper(BaseModel):
     """Mapper of dataset keys to standard aliases."""
 
+    # Meta-config
+    model_config = ConfigDict(frozen=True, extra='forbid')
+
     # ERA5 dataset dimensions
     t_dim: str = 'valid_time'
 

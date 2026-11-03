@@ -1,11 +1,12 @@
 """Data transformers for calculation of atmospheric quantities."""
 import abc
 import logging
-from dataclasses import dataclass
 from math import pi, tau
 from typing import Literal
 
 import numpy as np
+
+from pydantic import BaseModel, ConfigDict
 
 import xarray as xr
 
@@ -20,8 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 # HELPER
-@dataclass
-class AtmosphericConstant():
+class AtmosphericConstant(BaseModel):
     """
     Library of class of atmospheric constants useful for calculation.
 
@@ -31,6 +31,9 @@ class AtmosphericConstant():
         940 pages.  isbn 978-0-88865-283-6 ."
     link: https://www.eoas.ubc.ca/books/Practical_Meteorology/
     """
+
+    # Meta-config
+    model_config = ConfigDict(frozen=True, extra='forbid')
 
     # Air specific constant (perfect gas)
     rd: float = 287.05  # J/kg/K
