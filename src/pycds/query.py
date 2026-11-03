@@ -14,6 +14,7 @@ from xarray import Dataset
 
 # PACKAGE IMPORTS
 from pycds.config import PyCDSSettings, get_settings
+from pycds.utils import to_list
 
 
 # LOGGER
@@ -112,13 +113,13 @@ class CDSQueryHandler():
     PREC: int = .25
 
     # Init
-    def __init__(self, cfg: PyCDSSettings | None = None) -> None:
+    def __init__(self, settings: PyCDSSettings | None = None) -> None:
         """Instantiate class object."""
-        cfg = cfg or get_settings()
-        self.default_query_vars = cfg.default_query_vars
-        self.default_output_format = cfg.default_output_format
-        self.default_query_start = cfg.default_query_start
-        self.default_query_end = cfg.default_query_end
+        settings = settings or get_settings()
+        self.default_query_vars = settings.default_query_vars
+        self.default_output_format = settings.default_output_format
+        self.default_query_start = settings.default_query_start
+        self.default_query_end = settings.default_query_end
 
     # Properties
     @cached_property
@@ -198,10 +199,10 @@ class CDSQueryHandler():
 
         # Build the request
         request = {
-            'variable': variables if isinstance(variables, list) else [variables],
+            'variable': to_list(variables),
             'location': {
-                'latitude': round(lat / self.PREC) / self.PREC,
-                'longitude': round(lon / self.PREC) / self.PREC,
+                'latitude': round(lat / self.PREC) * self.PREC,
+                'longitude': round(lon / self.PREC) * self.PREC,
             },
             'date': [f'{t_start}/{t_end}'],
             'data_format': output_format,
