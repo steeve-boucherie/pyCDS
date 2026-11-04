@@ -164,21 +164,13 @@ class CDSQueryHandler():
 
         Returns
         -------
-            Dataset
+            None
         """
         # Assign default
         variables = variables or self.settings.variables
         query_start = query_start or self.settings.query_start or self.dataset_start
         query_end = query_end or self.settings.query_end or self.dataset_end
         output_format = output_format or OUTPUT_FORMAT
-
-        # Validate
-        allowed = ['netcdf', 'csv']
-        if output_format not in allowed:
-            msg = f'Invalid output format: {output_format}. Allowed values are: ' \
-                  f'{allowed}. Please check your inputs.'
-            logger.error(msg)
-            raise ValueError(msg)
 
         # Build the request
         request = {
