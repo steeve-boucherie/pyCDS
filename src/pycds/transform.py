@@ -342,7 +342,7 @@ class WSCalculator(DataTransformerInterface):
         """
         # Get variable
         u_da = self._ds[self.mapper.u_key]
-        v_da = self._ds[self.mapper.u_key]
+        v_da = self._ds[self.mapper.v_key]
 
         # Compute
         ws_da = (u_da**2 + v_da**2)**.5
@@ -538,7 +538,7 @@ class WDirCalculator(DataTransformerInterface):
         """
         # Get variable
         u_da = self._ds[self.mapper.u_key]
-        v_da = self._ds[self.mapper.u_key]
+        v_da = self._ds[self.mapper.v_key]
 
         # Compute
         wd_da = ((np.atan2(u_da, v_da) + pi) % tau) * self.factor
