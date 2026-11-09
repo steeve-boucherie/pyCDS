@@ -3,7 +3,7 @@ import os
 import tomllib
 from datetime import date
 from pathlib import Path
-from typing import Any, Annotated, Literal, get_args
+from typing import Any, Annotated, Literal
 
 from platformdirs import user_config_path
 
@@ -67,12 +67,17 @@ class PyCDSSettings(BaseModel):
         the data will be saved.
     output_fname: str
         The name of the file containing the downloaded data as it will be saved.
-    split_frequency: 'monthly' | 'yearly' | None
-        (Optional) The frequency for splitting the downloaded data into smaller \
-        time chunks for saving. If "yearly", save the each yearly chunk in a \
-        subfolder, "YYYY", whose name is the corresponding year. If "month", \
-        save each monthly chunk in a subfolder tree, "YYYY/mm", with name defined \
-        by the corresponding year and month.
+    split_data: bool
+        An option to split the downloaded data into smaller time chunks (yearly or \
+        monhtly) and save each chunk in a separate file. See the "split_frequency" \
+        attribute for more details.
+    split_frequency: 'monthly' | 'yearly'
+        The frequency for splitting the downloaded data into smaller time chunks \
+        for saving. If "yearly", save the each yearly chunk in a subfolder, \
+        "YYYY", whose name is the corresponding year. If "month", save each \
+        monthly chunk in a subfolder tree, "YYYY/mm", with name defined \
+        by the corresponding year and month. \
+        Note: This is used only if "split_data" is set to True.
     query_start: str | None
         (Optional) The query start date in yyyy-mm-dd format. \
         Use the library default if None is passed.
@@ -96,7 +101,8 @@ class PyCDSSettings(BaseModel):
     temp_folder: Path | None = None
     output_subdir: str | None = None
     output_fname: str = 'era5.nc'
-    split_frequency: SplitFreq | None = None
+    split_data: bool = False
+    split_frequency: SplitFreq = 'yearly'
 
     # Query settings
     variables: list[str] = Field(
@@ -114,7 +120,7 @@ class PyCDSSettings(BaseModel):
     query_end: date | None = None
 
     # Data enrichment
-    eng_variables: list[AllowedVars] = list(get_args(AllowedVars))
+    eng_variables: list[AllowedVars] = []
 
     # Validator
     @model_validator(mode='after')

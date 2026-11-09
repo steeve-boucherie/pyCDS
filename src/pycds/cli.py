@@ -3,9 +3,10 @@ import argparse
 import logging
 import sys
 import tempfile
+import tomllib
 from functools import cached_property
 from pathlib import Path
-from typing import get_args
+from typing import Any, get_args
 
 from pydantic import ValidationError, validate_call
 
@@ -101,12 +102,11 @@ class ModelFactory():
     def group_coords(self) -> AllowedDttm | list[AllowedDttm] | None:
         """Return the grouping coordinate(s) for splitting the dataset \
             in time chunk."""
-        if self.settings.split_frequency is not None:
-            out = {
-                'yearly': 'year',
-                'monthly': ['year', 'month']
-            }[self.settings.split_frequency]
-            return out
+        out = {
+            'yearly': 'year',
+            'monthly': ['year', 'month']
+        }[self.settings.split_frequency]
+        return out
 
     # Model
     @cached_property
@@ -204,7 +204,7 @@ def download_era5(
 
         # Save to year/month
         logger.info(f'{NAME}: Save data.')
-        if mf.settings.split_frequency is not None:
+        if mf.settings.split_data:
             ds = add_dttm(ds, mf.mapper.t_dim, mf.group_coords)
             save_groups(
                 ds.groupby(mf.group_coords),
@@ -219,6 +219,36 @@ def download_era5(
 # =========================================================================
 # COMMAND LINE EXECUTION
 # =========================================================================
+# CONFIG FILE PARSING
+def _parse_cfg(cfg: Path) -> dict[str, Any]:
+    """
+    Given the path to a configuration file, in .toml format, \
+    read its content and return the parsed settings in a dictionnary.
+
+    Parameters
+    ----------
+    cfg: Path
+        Path to the config file.
+
+    Returns
+    -------
+        dict[str, Any]
+    """
+    if not cfg.is_file():
+        logger.exception(
+            'Config file does not exists. The specified path: '
+            f'{str(cfg)} is not a file. Please check your inputs.'
+        )
+        sys.exit(2)
+    try:
+        with cfg.open('rb') as file:
+            params = tomllib.load(file)
+    except Exception:
+        logger.exception('Config file parsing failed. See traceback above.')
+        sys.exit(1)
+    return params
+
+
 # PARSER
 def _parse_arguments() -> argparse.Namespace:
     """Parse user inputs."""
@@ -245,6 +275,16 @@ def _parse_arguments() -> argparse.Namespace:
         action='store_true',
         help='Print the effective settings and exit (no download).'
     )
+    parser.add_argument(
+        '--cfg',
+        type=Path,
+        help=(
+            'Path to a configuration file (.toml) containing the query.'
+            'Use this argument to load pre-defined settings. Arguments '
+            'that are passed explicitely get precedence and override '
+            'duplicated entries from the file in case of conflict.'
+        )
+    )
 
     # Optional overrides: only forwarded if type by the user
     overrides: dict[str, dict] = {
@@ -260,10 +300,35 @@ def _parse_arguments() -> argparse.Namespace:
             type=str,
             help='Sub-folder where to save the data in the output root.'
         ),
+        'split_data': dict(
+            action='store_true',
+            help=(
+                'An option to split the downloaded data into smaller time chunks '
+                '(yearly or  monhtly) and save each chunk in a separate file.'
+            )
+        ),
         'split_frequency': dict(
             type=str,
             choices=get_args(SplitFreq),
             help='The frequency at which the result should be split (yearly or monthly).'
+        ),
+        'variables': dict(
+            type=list[str],
+            nargs='+',
+            help=(
+                'List of variable to be queried from the Climate Data Store.'
+                'See: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-timeseries?tab=overview '  # Noqa: E501
+                'for a list of available variable.'
+            )
+        ),
+        'eng_variables': dict(
+            type=list[str],
+            nargs='*',
+            help=(
+                'List of engineering variable to be added to the downloaded '
+                'data in postprocessing. Each variable must be assigned a '
+                'builder. Refer to the documentation for available variables.'
+            )
         )
     }
     for field, kwargs in overrides.items():
@@ -275,6 +340,37 @@ def _parse_arguments() -> argparse.Namespace:
         )
 
     args = parser.parse_args()
+
+    # Test configuration file
+    if args.cfg:
+        logger.info('Configuration file passed as argument. Parsing.')
+        params = _parse_cfg(args.cfg)
+        valid_fields = list(PyCDSSettings.model_fields)
+        invalid = (
+            set(params)
+            .difference(valid_fields)
+            .difference(['lat', 'lon'])
+        )
+        if invalid != set():
+            # NOTE: Raise error so that typos are flagged early.
+            logger.exception(f'Config file contains invalid keys: {list(invalid)}')
+            sys.exit(2)
+        explicit = [
+            key for key, val in vars(args).items()
+            if val is not None
+        ]
+        overrides = set(explicit).intersection(params)
+        if overrides != set():
+            logger.warning(
+                'Some keys defined in the config file were also passed '
+                'explicitely. Precedence is given to the latter. '
+                f'The following argument will be override: {list(overrides)}'
+            )
+        for key, val in params.items():
+            if key not in explicit:
+                setattr(args, key, val)
+        delattr(args, 'cfg')
+
     if not args.show_config and (args.lat is None or args.lon is None):
         parser.error('--lat and --lon are required unless --show-config is used')
 
